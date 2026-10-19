@@ -113,7 +113,7 @@ Run the whole suite with:
 ./test.sh
 ```
 
-It covers three layers:
+It covers four layers:
 
 **1. Perft.** The start position, plus the standard test positions covering
 castling, en passant, promotions, and castling rights:
@@ -152,9 +152,54 @@ python3 test_reference.py        # games, plies, seed
 python3 test_reference.py 100 120 42
 ```
 
-**Self-play** (`self_play_test.py`) plays the engine against itself and writes
-a PGN. It is slow at high depth; the defaults are tuned for a quick check.
+**4. Self-play** (`self_play_test.py`). Plays the engine against itself and
+prints the game as PGN so it can be reviewed by eye. See below.
+
+### Self-play mode
+
+`./test.sh selfplay` plays the engine against itself and prints the PGN. Two
+separate engine processes play each other, so they do not share a
+transposition table or any other search state.
 
 ```sh
-python3 self_play_test.py
+./test.sh selfplay                          # one game at depth 4
+./test.sh selfplay --depth 6                # fixed depth per move
+./test.sh selfplay --movetime 200           # fixed time per move
+./test.sh selfplay --games 5 --depth 5      # several games
+./test.sh selfplay --quiet                  # summary lines only
+./test.sh selfplay --pgn games.pgn          # also save the games
 ```
+
+Any extra arguments are passed straight through, so `python3 self_play_test.py
+--help` lists every option.
+
+python-chess acts as the referee: it validates that each move the engine
+returns is legal in the current position, tracks the game, and renders
+standard algebraic notation. If the engine ever returns an illegal or
+unparseable move, the run stops and reports which side played it. Games are
+adjudicated on checkmate, stalemate, insufficient material, the seventy-move
+rule, fivefold repetition, or the move limit, and the reason is recorded in
+the PGN `Termination` header.
+
+Output looks like this:
+
+```text
+======================================================================
+GAME 1
+======================================================================
+[Event "RookZero self-play"]
+[Site "local"]
+[Date "2026.10.19"]
+[Round "?"]
+[White "RookZero 1.2.0"]
+[Black "RookZero 1.2.0"]
+[Result "1/2-1/2"]
+[Termination "move limit"]
+[Plies "24"]
+
+1. Nc3 Nc6 2. Nf3 Nf6 3. a4 a5 4. d4 d5 5. h4 h5 6. Be3 Be6 7. g3 Ng4 8. Kd2 f5
+1/2-1/2
+```
+
+Set `ROOKZERO=/path/to/binary` to test a different build. Self-play needs
+python-chess; the rest of the suite runs without it.

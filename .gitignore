@@ -1,3 +1,9 @@
+# Build artifacts
 rookzero
 test_roundtrip
+
+# Test output
 self_play.pgn
+*.pgn
+__pycache__/
+*.swp

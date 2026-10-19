@@ -1,9 +1,34 @@
 #!/bin/sh
-# RookZero test suite: perft correctness, make/unmake round-trips, and
-# randomized move-generation validation against python-chess.
+# RookZero test suite: perft correctness, make/unmake round-trips, randomized
+# move-generation validation against python-chess, and self-play.
+#
+# Usage:
+#   ./test.sh                       run every check (default)
+#   ./test.sh selfplay [options]    play self-play games and print the PGN
+#   ./test.sh --help                show this message
 set -eu
 
 cd "$(dirname "$0")"
+
+usage() {
+    # Print the leading comment block (skipping the shebang), stopping at the
+    # first line that is not a comment.
+    sed -n '2,${/^#/!q;s/^#\{1,\} \{0,1\}//p;}' "$0"
+    exit 0
+}
+
+MODE=all
+case "${1:-}" in
+    "")        MODE=all ;;
+    all)       MODE=all; shift ;;
+    selfplay)  MODE=selfplay; shift ;;
+    -h|--help) usage ;;
+    *)
+        printf 'unknown option: %s\n\n' "$1" >&2
+        usage >&2
+        ;;
+esac
+
 ./build.sh >/dev/null
 
 PY=python3
@@ -24,6 +49,15 @@ fail() {
     printf 'FAIL: %s\n' "$1" >&2
     exit 1
 }
+
+# Self-play needs python-chess to render and validate the game.
+if [ "$MODE" = selfplay ]; then
+    if [ -z "$PY" ]; then
+        fail 'self-play needs python-chess (pip install python-chess)'
+    fi
+    # Remaining arguments pass straight through to the script.
+    exec "$PY" self_play_test.py "$@"
+fi
 
 echo "== perft (start position) =="
 out=$(printf 'position startpos\nperft 1\nperft 2\nperft 3\nperft 4\nquit\n' | ./rookzero)
@@ -76,3 +110,4 @@ fi
 
 echo
 echo "All tests passed."
+echo "Run './test.sh selfplay' to play the engine against itself."
