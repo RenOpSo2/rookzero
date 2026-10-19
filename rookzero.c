@@ -16,10 +16,15 @@
 #include <stdatomic.h>
 #include <pthread.h>
 
+#define VERSION "1.2.0"
+
 #define MAX_MOVES 256
 #define INF 32000
 #define MATE 30000
 #define MAX_PLY 128
+/* Upper bound on the `perft` debug command, so a stray large value cannot
+ * wedge the engine in an unbounded walk. */
+#define MAX_PERFT_DEPTH 8
 
 enum { EMPTY=0, WP=1, WN, WB, WR, WQ, WK, BP, BN, BB, BR, BQ, BK };
 enum { WHITE=0, BLACK=1 };
@@ -126,10 +131,15 @@ static int square_attacked(const Position *p, int sq, int by_side) {
     int knight=by_side==WHITE?WN:BN;
     for(int i=0;i<8;i++){int nf=f+knight_delta[i][0],nr=r+knight_delta[i][1];if(nf>=0&&nf<8&&nr>=0&&nr<8&&p->board[nr*8+nf]==knight)return 1;}
     static const int dirs[8][2]={{1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1}};
-    int king=by_side==WHITE?WK:BK;
+    /*
+     * Compare against the king piece TYPE. Comparing t (a type, 1..6) against
+     * the full piece code (BK == 12) never matches, which silently made the
+     * engine blind to an enemy king on an adjacent square.
+     */
+    const int KING_TYPE = piece_type(WK);
     for(int d=0;d<8;d++){
         int nf=f+dirs[d][0],nr=r+dirs[d][1],dist=1;
-        while(nf>=0&&nf<8&&nr>=0&&nr<8){int pc=p->board[nr*8+nf];if(pc){if(color_of(pc)==by_side){int t=piece_type(pc);if(t==king&&dist==1)return 1;if(d<4&&(t==WR||t==WQ||t==BR||t==BQ))return 1;if(d>=4&&(t==WB||t==WQ||t==BB||t==BQ))return 1;}break;}nf+=dirs[d][0];nr+=dirs[d][1];dist++;}
+        while(nf>=0&&nf<8&&nr>=0&&nr<8){int pc=p->board[nr*8+nf];if(pc){if(color_of(pc)==by_side){int t=piece_type(pc);if(t==KING_TYPE&&dist==1)return 1;if(d<4&&(t==WR||t==WQ||t==BR||t==BQ))return 1;if(d>=4&&(t==WB||t==WQ||t==BB||t==BQ))return 1;}break;}nf+=dirs[d][0];nr+=dirs[d][1];dist++;}
     }
     return 0;
 }
@@ -174,7 +184,16 @@ static void generate_pseudo(const Position *p, MoveList *l) {
     }
 }
 static int make_move(Position *p, Move m, Undo *u) {
-    int pc=p->board[m.from], side=p->side, captured=p->board[m.to];
+    int pc=p->board[m.from], side=p->side;
+    /*
+     * dest holds whatever was on the destination square before the move. For a
+     * normal move that is the captured piece; for an en passant capture it is
+     * EMPTY, because the pawn actually taken sits on a different square. The
+     * rollback path must restore dest, not the captured piece, otherwise a
+     * rejected en passant leaves a phantom piece on the board.
+     */
+    int dest=p->board[m.to];
+    int captured=dest;
     *u=(Undo){m,captured,p->castle,p->ep,p->halfmove,p->fullmove,p->side,p->key};
     p->ep=-1;
     if(m.flags&MF_EP){captured=p->board[m.to+(side==WHITE?-8:8)];u->captured=captured;p->board[m.to+(side==WHITE?-8:8)]=EMPTY;}
@@ -193,7 +212,7 @@ static int make_move(Position *p, Move m, Undo *u) {
     p->side ^= 1;
     p->key = hash_position(p);
     if(in_check(p,side)){ /* illegal: restore immediately */
-        p->board[m.from]=pc;p->board[m.to]=captured;
+        p->board[m.from]=pc;p->board[m.to]=dest;
         if(m.flags&MF_EP)p->board[m.to+(side==WHITE?-8:8)]=u->captured;
         if(m.flags&MF_CASTLE){if(m.to==6){p->board[7]=WR;p->board[5]=EMPTY;}else if(m.to==2){p->board[0]=WR;p->board[3]=EMPTY;}else if(m.to==62){p->board[63]=BR;p->board[61]=EMPTY;}else if(m.to==58){p->board[56]=BR;p->board[59]=EMPTY;}}
         p->castle=u->castle;p->ep=u->ep;p->halfmove=u->halfmove;p->fullmove=u->fullmove;p->side=u->side;p->key=u->key;return 0;
@@ -352,7 +371,7 @@ static int parse_fen(Position *p, const char *fen) {
     return 1;
 }
 static void print_board(const Position *p){for(int r=7;r>=0;r--){printf("%d ",r+1);for(int f=0;f<8;f++){int pc=p->board[r*8+f];char c='.';if(pc){const char *names=" PNBRQK";int t=piece_type(pc);c=names[t];if(color_of(pc)==BLACK)c=(char)tolower(c);}printf("%c ",c);}printf("\n");}printf("  a b c d e f g h\n");}
-static void do_position(Position *p,char *line){char *tok=strtok(line," \t\r\n");if(!tok)return;tok=strtok(NULL," \t\r\n");if(!tok)return;if(!strcmp(tok,"startpos")){set_startpos(p);tok=strtok(NULL," \t\r\n");}else if(!strcmp(tok,"fen")){char fen[256]="";for(int i=0;i<6;i++){char *part=strtok(NULL," \t\r\n");if(!part)return;if(i)strcat(fen," ");strcat(fen,part);}if(!parse_fen(p,fen))set_startpos(p);tok=strtok(NULL," \t\r\n");}else return;
+static void do_position(Position *p,char *line){char *tok=strtok(line," \t\r\n");if(!tok)return;tok=strtok(NULL," \t\r\n");if(!tok)return;if(!strcmp(tok,"startpos")){set_startpos(p);tok=strtok(NULL," \t\r\n");}else if(!strcmp(tok,"fen")){char fen[256]="";size_t used=0;for(int i=0;i<6;i++){char *part=strtok(NULL," \t\r\n");if(!part)return;int n=snprintf(fen+used,sizeof(fen)-used,"%s%s",i?" ":"",part);if(n<0||(size_t)n>=sizeof(fen)-used)return;used+=(size_t)n;}if(!parse_fen(p,fen))set_startpos(p);tok=strtok(NULL," \t\r\n");}else return;
     if(tok&&!strcmp(tok,"moves")){while((tok=strtok(NULL," \t\r\n"))){Move m;if(parse_uci_move(p,tok,&m)){Undo u;make_move(p,m,&u);}}}}
 static void go_search(Position *p, int max_depth) {
     nodes = 0;
@@ -448,33 +467,58 @@ static void parse_go(const char *line, const Position *p) {
     }
 }
 static unsigned long long perft(Position *p,int depth){if(depth==0)return 1;MoveList l;generate_legal(p,&l);unsigned long long n=0;for(int i=0;i<l.count;i++){Undo u;if(!make_move(p,l.moves[i],&u))continue;n+=perft(p,depth-1);unmake_move(p,&u);}return n;}
+
+/* Matches a whole leading token, so "ucix" or "gogo" are not mistaken for
+ * "uci" or "go". The token must be followed by end-of-line or whitespace. */
+static int cmd_is(const char *line, const char *cmd) {
+    size_t n = strlen(cmd);
+    if (strncmp(line, cmd, n) != 0) return 0;
+    char c = line[n];
+    return c == '\0' || c == '\n' || c == '\r' || c == ' ' || c == '\t';
+}
+
+/* ROOKZERO_NO_MAIN lets the test harnesses link against this file without
+ * pulling in the UCI main loop. */
+#ifndef ROOKZERO_NO_MAIN
 int main(void) {
     init_zobrist();
     Position pos; set_startpos(&pos);
     char line[4096];
     while (fgets(line,sizeof(line),stdin)) {
-        if (!strncmp(line,"uci",3)) {
-            printf("id name RookZero 1.1.1\nid author RookZero contributors\nuciok\n"); fflush(stdout);
-        } else if (!strncmp(line,"isready",7)) {
+        if (cmd_is(line,"uci")) {
+            printf("id name RookZero " VERSION "\nid author RookZero contributors\nuciok\n"); fflush(stdout);
+        } else if (cmd_is(line,"isready")) {
             printf("readyok\n"); fflush(stdout);
-        } else if (!strncmp(line,"stop",4)) {
+        } else if (cmd_is(line,"stop")) {
             stop_and_join();
-        } else if (!strncmp(line,"quit",4)) {
+        } else if (cmd_is(line,"quit")) {
             stop_and_join(); break;
-        } else if (!strncmp(line,"ucinewgame",10)) {
+        } else if (cmd_is(line,"ucinewgame")) {
             stop_and_join(); set_startpos(&pos);
             memset(tt_key,0,sizeof(tt_key)); memset(history_heur,0,sizeof(history_heur)); memset(killer,0,sizeof(killer));
-        } else if (!strncmp(line,"position",8)) {
+        } else if (cmd_is(line,"position")) {
             stop_and_join(); do_position(&pos,line);
-        } else if (!strncmp(line,"go",2)) {
+        } else if (cmd_is(line,"go")) {
             stop_and_join(); parse_go(line,&pos);
-        } else if (!strncmp(line,"perft",5)) {
-            stop_and_join(); int d=atoi(line+5); if(d<0)d=0; if(d>8)d=8;
+        } else if (cmd_is(line,"perft")) {
+            stop_and_join(); int d=atoi(line+5); if(d<0)d=0; if(d>MAX_PERFT_DEPTH)d=MAX_PERFT_DEPTH;
             printf("perft %d: %llu\n",d,perft(&pos,d)); fflush(stdout);
-        } else if (line[0]=='d' && (line[1]=='\n'||line[1]=='\r'||line[1]=='\0')) {
+        } else if (cmd_is(line,"d")) {
             stop_and_join(); print_board(&pos); fflush(stdout);
+        } else if (cmd_is(line,"lm")) {
+            stop_and_join(); MoveList l; generate_legal(&pos,&l);
+            for(int i=0;i<l.count;i++){char b[8];move_to_uci(l.moves[i],b);printf("%s\n",b);}
+            printf("end\n"); fflush(stdout);
+        } else if (cmd_is(line,"echo")) {
+            stop_and_join();
+            char arg[1024]; snprintf(arg, sizeof(arg), "%s", line + 4);
+            char *a = arg;
+            while (*a == ' ' || *a == '\t') a++;
+            a[strcspn(a, "\r\n")] = '\0';
+            printf("%s\n", a); fflush(stdout);
         }
     }
     stop_and_join();
     return 0;
 }
+#endif /* ROOKZERO_NO_MAIN */
