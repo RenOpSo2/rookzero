@@ -1,9 +1,11 @@
 # Build artifacts
 rookzero
 test_roundtrip
+*venv
 
 # Test output
 self_play.pgn
+*.venv
 *.pgn
 __pycache__/
 *.swp

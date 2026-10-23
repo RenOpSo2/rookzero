@@ -16,6 +16,8 @@
  *
  * Built by test.sh via -DROOKZERO_NO_MAIN so the UCI main loop is excluded.
  */
+#define ROOKZERO_NO_MAIN
+#include "rookzero.h"
 #include "rookzero.c"
 #include <stdarg.h>
 

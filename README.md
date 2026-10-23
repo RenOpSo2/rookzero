@@ -15,26 +15,6 @@ RookZero is an experimental chess engine written in C. It uses a classical searc
 
 The search worker uses an explicit 4 MiB pthread stack to avoid exhausting Alpine/musl's smaller default thread stack during recursive quiescence search. The POSIX feature macro is defined in the source for portable `clock_gettime` declarations.
 
-This is still a prototype, not a tournament-tested engine. No Elo claim is made. Draw and repetition handling remain future work.
-
-## Changes in 1.2.0
-
-This release is a correctness and stability pass. It fixes two move-generation
-bugs that could cause the engine to play illegal moves, plus a few robustness issues.
-
-**Fixed: rejected en passant captures corrupted the position.** When
-`make_move` rejected an illegal en passant capture, its rollback wrote the
-captured pawn onto the en passant *target* square, which is empty by
-definition. The stale piece then made every subsequent move generated in the
-same call look illegal. This silently dropped large numbers of legal moves
-and corrupted perft counts.
-
-**Fixed: an enemy king on an adjacent square was never seen as an attacker.**
-`square_attacked` compared a piece *type* against the black king's full piece
-code, so the comparison never matched. The engine would offer king moves that
-stepped next to the opposing king. Minimal reproduction, where only three
-moves are legal:
-
 ```text
 position fen 8/8/8/8/7k/8/7K/8 w - - 0 1
 perft 1          ; 1.1.1 printed 5, 1.2.0 prints 3
@@ -58,7 +38,7 @@ makes scripted validation against a reference generator straightforward.
 Perft counts for the standard test positions now match published values; see
 the Tests section.
 
-## Build on Linux / Termux
+## Build on Linux
 
 You need a C compiler (Clang or GCC) and pthread support.
 
